@@ -1,32 +1,17 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <title>Secure Real-Time Multiplayer Game</title>
-    <meta
-      name="description"
-      content="An example for the fCC InfoSec Secure Real-Time Multiplayer Game project"
-    />
-    <meta charset="utf-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="../public/style.css" type="text/css" />
-    <link href="https://fonts.googleapis.com/css?family=Press+Start+2P&display=swap" rel="stylesheet">
-    <script src="/socket.io/socket.io.js"></script>
-  </head>
-  <body>
-    <header>
-      <h1>Secure Real Time Multiplayer Game</h1>
-    </header>
-    <hr style="margin: 25px" />
-    <div class="container">
-      <canvas 
-        ref="game"
-        id="game-window" 
-        width="640" 
-        height="480"
-      >
-      </canvas>
-    </div>
-  </body>
-  <script src="../public/game.mjs" type="module"></script>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure RT Multiplayer Game</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+</head>
+<body style="margin:0;background:#111;color:#fff;font-family:sans-serif">
+  <div style="padding:8px">WASD o Flechas para moverte</div>
+  <canvas id="game-window" style="display:block;margin:0 auto;border:1px solid #333;background:#000"></canvas>
+
+  <!-- Socket.IO v2 client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/public/game.mjs"></script>
+</body>
 </html>
