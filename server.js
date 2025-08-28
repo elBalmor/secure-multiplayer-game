@@ -3,46 +3,36 @@ require('dotenv').config();
 
 const path = require('path');
 const express = require('express');
-const helmet = require('helmet');       // v3.21.3
+const helmet = require('helmet');       // v3.21.3 (requerido por FCC)
 const http = require('http');
 const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
 
-/* ========= Seguridad: Helmet (16–19) ========= */
+/* ========= Seguridad: Helmet (historias 16–19) ========= */
 app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' })); // 19
 app.use(helmet.noSniff());                              // 16
 app.use(helmet.xssFilter());                            // 17
 app.use(helmet.noCache());                              // 18
 
 /* ========= CORS (exponer headers al runner FCC) =========
-   El runner está en otro origen; sin exposedHeaders no puede leerlos. */
+   Ojo: SOLO en minúsculas para que fetch los lea sin dramas */
 app.use(cors({
   origin: '*',
   methods: ['GET', 'HEAD', 'OPTIONS'],
   exposedHeaders: [
-    // en minúsculas (lo que ve fetch())…
     'x-powered-by',
     'x-content-type-options',
     'x-xss-protection',
     'cache-control',
     'pragma',
     'expires',
-    'surrogate-control',
-    // …y en mayúsculas por si algún user-agent los compara literal
-    'X-Powered-By',
-    'X-Content-Type-Options',
-    'X-XSS-Protection',
-    'Cache-Control',
-    'Pragma',
-    'Expires',
-    'Surrogate-Control'
+    'surrogate-control'
   ]
 }));
 
-/* ========= Fijar headers manualmente en TODAS las respuestas =========
-   (por si algún proxy/estático cambia algo; esto garantiza presencia) */
+/* ========= Fijar headers de seguridad en TODAS las respuestas ========= */
 app.use((req, res, next) => {
   res.set({
     'X-Powered-By': 'PHP 7.4.3',
@@ -56,14 +46,14 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ========= Archivos estáticos y vistas ========= */
+/* ========= Archivos estáticos y vista ========= */
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
-// (Opcional) health-check
+// (Opcional) Health-check
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 /* ========= Juego (estado simple) ========= */
@@ -109,6 +99,7 @@ io.on('connection', (socket) => {
   socket.on('move', (dir) => {
     const p = players.get(socket.id);
     if (!p) return;
+
     switch (dir) {
       case 'up':    p.y = Math.max(0, p.y - STEP); break;
       case 'down':  p.y = Math.min(HEIGHT, p.y + STEP); break;
@@ -116,6 +107,8 @@ io.on('connection', (socket) => {
       case 'right': p.x = Math.min(WIDTH, p.x + STEP); break;
       default: break;
     }
+
+    // Colisión server-side con coleccionables
     for (const [cid, c] of collectibles) {
       const dx = p.x - c.x;
       const dy = p.y - c.y;
@@ -126,6 +119,7 @@ io.on('connection', (socket) => {
         io.emit('collectibles:spawn', newC);
       }
     }
+
     io.emit('players:update', Array.from(players.values()));
   });
 
