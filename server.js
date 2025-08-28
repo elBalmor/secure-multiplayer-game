@@ -7,8 +7,8 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const socket = require('socket.io');
 
-const helmet = require('helmet');   // ^3.21.3 (FCC)
-const nocache = require('nocache'); // módulo aparte (más fiable que la opción inline)
+const helmet = require('helmet');   // ^3.21.3
+const nocache = require('nocache'); // módulo aparte
 const cors = require('cors');
 
 const fccTestingRoutes = require('./routes/fcctesting.js');
@@ -18,20 +18,16 @@ const app = express();
 const server = http.createServer(app);
 
 /* ========== Seguridad (historias 16–19) ========== */
-// 19) Encabezado “falso” de tecnología
-app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' }));
-// 16) Evitar MIME sniff
-app.use(helmet.noSniff());
-// 17) Prevenir XSS (v3)
-app.use(helmet.xssFilter());
-// 18) Evitar caché en cliente (usamos el módulo nocache)
-app.use(nocache());
+app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' })); // 19
+app.use(helmet.noSniff());                              // 16
+app.use(helmet.xssFilter());                            // 17
+app.use(nocache());                                      // 18
 
-/* ========== body-parser (como en el boilerplate) ========== */
+/* ========== body-parser ========== */
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-/* ========== CORS (FCC lee cross-origin; expón headers) ========== */
+/* ========== CORS (exponer headers al runner FCC) ========== */
 app.use(cors({
   origin: '*',
   methods: ['GET', 'HEAD', 'OPTIONS'],
@@ -47,7 +43,7 @@ app.use(cors({
 }));
 app.options('*', cors());
 
-/* ========== Fija headers de seguridad en TODAS las respuestas ========== */
+/* ========== Fijar headers de seguridad en TODAS las respuestas ========== */
 app.use((req, res, next) => {
   res.set({
     'X-Powered-By': 'PHP 7.4.3',
@@ -57,21 +53,20 @@ app.use((req, res, next) => {
     'Pragma': 'no-cache',
     'Expires': '0',
     'Surrogate-Control': 'no-store',
-    // (refuerzo) expón headers en minúsculas para fetch()
     'Access-Control-Expose-Headers':
       'x-powered-by, x-content-type-options, x-xss-protection, cache-control, pragma, expires, surrogate-control'
   });
   next();
 });
 
-/* ========== HEAD explícito en "/" (algunos runners usan HEAD) ========== */
+/* ========== HEAD explícito en "/" ==========
+   (algunos runners usan HEAD para leer headers) */
 app.head('/', (req, res) => res.status(200).end());
 
-/* ========== Rutas estáticas ========== */
+/* ========== Rutas estáticas e índex ========== */
 app.use('/public', express.static(process.cwd() + '/public'));
 app.use('/assets', express.static(process.cwd() + '/assets'));
 
-/* ========== Index ========== */
 app.get('/', (req, res) => {
   res.sendFile(process.cwd() + '/views/index.html');
 });
@@ -101,93 +96,114 @@ const listener = server.listen(portNum, () => {
   }
 });
 
-/* ========== Socket.IO v2.x (compatible con tu package.json) ========== */
+/* ========== Juego (estado simple en memoria, sin canvas-data) ========== */
 const io = socket(server);
 
-const Collectible = require('./public/Collectible');
-const { generateStartPos, canvasCalcs } = require('./public/canvas-data');
+// Dimensiones de juego básicas
+const WIDTH = 800;
+const HEIGHT = 600;
+const STEP = 5;
 
-let currPlayers = [];
-const destroyedCoins = [];
+// Utilidad simple para posiciones aleatorias dentro del área de juego
+function randomIn(min, max, margin = 5) {
+  return Math.floor(Math.random() * (max - min - margin * 2)) + min + margin;
+}
 
-const generateCoin = () => {
-  const rand = Math.random();
-  let coinValue;
-  if (rand < 0.6) coinValue = 1;
-  else if (rand < 0.85) coinValue = 2;
-  else coinValue = 3;
-
-  return new Collectible({
-    x: generateStartPos(canvasCalcs.playFieldMinX, canvasCalcs.playFieldMaxX, 5),
-    y: generateStartPos(canvasCalcs.playFieldMinY, canvasCalcs.playFieldMaxY, 5),
-    value: coinValue,
-    id: Date.now()
-  });
-};
-
+// Estructuras en memoria
+let currPlayers = [];          // [{id,x,y,score}]
+const destroyedCoins = [];     // [coinId]
 let coin = generateCoin();
+
+// Genera un coleccionable básico (value 1–3)
+function generateCoin() {
+  const r = Math.random();
+  const value = r < 0.6 ? 1 : r < 0.85 ? 2 : 3;
+  return {
+    id: Date.now(),
+    x: randomIn(0, WIDTH, 10),
+    y: randomIn(0, HEIGHT, 10),
+    value
+  };
+}
 
 io.sockets.on('connection', (socket) => {
   console.log(`New connection ${socket.id}`);
 
+  // Enviar estado inicial
   socket.emit('init', { id: socket.id, players: currPlayers, coin });
 
+  // Alta de jugador
   socket.on('new-player', (obj) => {
     obj.id = socket.id;
+    // asegura campos mínimos
+    obj.x = Number(obj.x) || randomIn(0, WIDTH, 10);
+    obj.y = Number(obj.y) || randomIn(0, HEIGHT, 10);
+    obj.score = Number(obj.score) || 0;
+
     currPlayers.push(obj);
     socket.broadcast.emit('new-player', obj);
   });
 
-  socket.on('move-player', (dir, obj) => {
-    const movingPlayer = currPlayers.find((p) => p.id === socket.id);
-    if (movingPlayer) {
-      movingPlayer.x = obj.x;
-      movingPlayer.y = obj.y;
+  // Movimiento
+  socket.on('move-player', (dir, posObj) => {
+    const p = currPlayers.find((pl) => pl.id === socket.id);
+    if (p && posObj) {
+      p.x = Number(posObj.x) || p.x;
+      p.y = Number(posObj.y) || p.y;
       socket.broadcast.emit('move-player', {
         id: socket.id,
         dir,
-        posObj: { x: movingPlayer.x, y: movingPlayer.y }
+        posObj: { x: p.x, y: p.y }
       });
     }
   });
 
-  socket.on('stop-player', (dir, obj) => {
-    const stoppingPlayer = currPlayers.find((p) => p.id === socket.id);
-    if (stoppingPlayer) {
-      stoppingPlayer.x = obj.x;
-      stoppingPlayer.y = obj.y;
+  // Stop
+  socket.on('stop-player', (dir, posObj) => {
+    const p = currPlayers.find((pl) => pl.id === socket.id);
+    if (p && posObj) {
+      p.x = Number(posObj.x) || p.x;
+      p.y = Number(posObj.y) || p.y;
       socket.broadcast.emit('stop-player', {
         id: socket.id,
         dir,
-        posObj: { x: stoppingPlayer.x, y: stoppingPlayer.y }
+        posObj: { x: p.x, y: p.y }
       });
     }
   });
 
+  // Destruir item (anotar puntaje y respawn)
   socket.on('destroy-item', ({ playerId, coinValue, coinId }) => {
     if (!destroyedCoins.includes(coinId)) {
       const scoringPlayer = currPlayers.find((o) => o.id === playerId);
-      const sock = io.sockets.connected[scoringPlayer.id];
-      scoringPlayer.score += coinValue;
+      if (!scoringPlayer) return;
+
+      // sumar puntos
+      scoringPlayer.score = Number(scoringPlayer.score || 0) + Number(coinValue || 0);
       destroyedCoins.push(coinId);
 
+      // avisar puntaje actualizado
       io.emit('update-player', scoringPlayer);
 
-      if (scoringPlayer.score >= 100) {
+      // fin de juego (opcional)
+      const sock = io.sockets.connected && io.sockets.connected[scoringPlayer.id];
+      if (scoringPlayer.score >= 100 && sock) {
         sock.emit('end-game', 'win');
         sock.broadcast.emit('end-game', 'lose');
       }
 
+      // respawn del coin
       coin = generateCoin();
       io.emit('new-coin', coin);
     }
   });
 
+  // Desconexión
   socket.on('disconnect', () => {
     socket.broadcast.emit('remove-player', socket.id);
     currPlayers = currPlayers.filter((p) => p.id !== socket.id);
   });
 });
 
-/* ========== Export para tests ========== */
-module.exports = listener; // exporta el servidor (http.Server)
+/* ========== Export para tests (http.Server) ========== */
+module.exports = listener;
