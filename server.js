@@ -3,29 +3,34 @@ require('dotenv').config();
 
 const path = require('path');
 const express = require('express');
-const helmet = require('helmet');       // v3.21.3 (requerido por FCC)
+const helmet = require('helmet');       // v3.21.3
 const http = require('http');
-const cors = require('cors');           // para exponer headers al runner FCC
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
 
-// ===== Seguridad con Helmet (historias 16–19) =====
-// 19) Encabezado "falso" de tecnología
-app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' }));
-// 16) Evitar MIME sniff
-app.use(helmet.noSniff());
-// 17) Prevenir XSS (v3)
-app.use(helmet.xssFilter());
-// 18) Deshabilitar caché en cliente
-app.use(helmet.noCache());
+/* ========= Seguridad: Helmet (16–19) ========= */
+app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' })); // 19
+app.use(helmet.noSniff());                              // 16
+app.use(helmet.xssFilter());                            // 17
+app.use(helmet.noCache());                              // 18
 
-// ===== CORS para que el runner de FCC pueda LEER los headers (cross-origin) =====
-// Importante: sin esto, el navegador bloquea la lectura de headers y en FCC quedan "Esperando".
+/* ========= CORS (exponer headers al runner FCC) =========
+   El runner está en otro origen; sin exposedHeaders no puede leerlos. */
 app.use(cors({
   origin: '*',
   methods: ['GET', 'HEAD', 'OPTIONS'],
   exposedHeaders: [
+    // en minúsculas (lo que ve fetch())…
+    'x-powered-by',
+    'x-content-type-options',
+    'x-xss-protection',
+    'cache-control',
+    'pragma',
+    'expires',
+    'surrogate-control',
+    // …y en mayúsculas por si algún user-agent los compara literal
     'X-Powered-By',
     'X-Content-Type-Options',
     'X-XSS-Protection',
@@ -36,17 +41,32 @@ app.use(cors({
   ]
 }));
 
-// ===== Archivos estáticos y vista =====
+/* ========= Fijar headers manualmente en TODAS las respuestas =========
+   (por si algún proxy/estático cambia algo; esto garantiza presencia) */
+app.use((req, res, next) => {
+  res.set({
+    'X-Powered-By': 'PHP 7.4.3',
+    'X-Content-Type-Options': 'nosniff',
+    'X-XSS-Protection': '1; mode=block',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'Surrogate-Control': 'no-store'
+  });
+  next();
+});
+
+/* ========= Archivos estáticos y vistas ========= */
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
-// (Opcional) Health-check para diagnóstico rápido en Render
+// (Opcional) health-check
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
-// ===== Lógica simple del juego =====
+/* ========= Juego (estado simple) ========= */
 const WIDTH = 800;
 const HEIGHT = 600;
 const STEP = 5;
@@ -63,15 +83,12 @@ function spawnCollectible() {
   collectibles.set(id, c);
   return c;
 }
-
-// Asegura al menos un coleccionable
 if (collectibles.size === 0) spawnCollectible();
 
-// ===== Socket.IO v2.3.0 =====
+/* ========= Socket.IO v2.3.0 ========= */
 const io = require('socket.io')(server);
 
 io.on('connection', (socket) => {
-  // Crear jugador
   const player = {
     id: socket.id,
     x: Math.floor(Math.random() * (WIDTH - 40)) + 20,
@@ -80,7 +97,6 @@ io.on('connection', (socket) => {
   };
   players.set(socket.id, player);
 
-  // Estado inicial al cliente
   socket.emit('init', {
     selfId: socket.id,
     players: Array.from(players.values()),
@@ -88,14 +104,11 @@ io.on('connection', (socket) => {
     bounds: { width: WIDTH, height: HEIGHT }
   });
 
-  // Notificar a todos los clientes
   io.emit('players:update', Array.from(players.values()));
 
-  // Movimiento
   socket.on('move', (dir) => {
     const p = players.get(socket.id);
     if (!p) return;
-
     switch (dir) {
       case 'up':    p.y = Math.max(0, p.y - STEP); break;
       case 'down':  p.y = Math.min(HEIGHT, p.y + STEP); break;
@@ -103,8 +116,6 @@ io.on('connection', (socket) => {
       case 'right': p.x = Math.min(WIDTH, p.x + STEP); break;
       default: break;
     }
-
-    // Colisión server-side con coleccionables
     for (const [cid, c] of collectibles) {
       const dx = p.x - c.x;
       const dy = p.y - c.y;
@@ -115,22 +126,19 @@ io.on('connection', (socket) => {
         io.emit('collectibles:spawn', newC);
       }
     }
-
     io.emit('players:update', Array.from(players.values()));
   });
 
-  // Desconexión
   socket.on('disconnect', () => {
     players.delete(socket.id);
     io.emit('players:update', Array.from(players.values()));
   });
 });
 
-// ===== Arranque del servidor =====
+/* ========= Arranque ========= */
 const PORT = process.env.PORT || 3000;
 const listener = server.listen(PORT, () => {
   console.log('Server listening on ' + PORT);
 });
 
-// Export para tests (chai-http usa .address())
 module.exports = listener;
