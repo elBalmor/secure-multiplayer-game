@@ -21,12 +21,14 @@ app.use(helmet.xssFilter());
 // 18) Deshabilitar caché en cliente
 app.use(helmet.noCache());
 
-/* ========== body-parser (recomendado por el boilerplate) ========== */
-app.use(bodyParser.urlencoded({ extended: true }));
+
 
 /* ========== CORS (colocado inmediatamente después de body-parser) ========== */
 // Nota: con origin:* basta; si quieres, puedes agregar exposedHeaders más abajo
-app.use(cors({ origin: '*' }));
+app.use(cors())
+
+/* ========== body-parser (recomendado por el boilerplate) ========== */
+app.use(bodyParser.urlencoded({ extended: true }));
 
 /* ========== Fijar headers de seguridad en TODAS las respuestas ========== */
 app.use((req, res, next) => {
