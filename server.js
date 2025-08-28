@@ -25,10 +25,9 @@ app.use(helmet.noCache());
 
 /* ========== CORS (colocado inmediatamente después de body-parser) ========== */
 // Nota: con origin:* basta; si quieres, puedes agregar exposedHeaders más abajo
-app.use(cors())
+app.use(cors({origin: '*'})); 
 
-/* ========== body-parser (recomendado por el boilerplate) ========== */
-app.use(bodyParser.urlencoded({ extended: true }));
+
 
 /* ========== Fijar headers de seguridad en TODAS las respuestas ========== */
 app.use((req, res, next) => {
