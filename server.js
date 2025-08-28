@@ -3,25 +3,50 @@ require('dotenv').config();
 
 const path = require('path');
 const express = require('express');
-const helmet = require('helmet'); // versión ^3.21.3 (FCC requiere v3)
+const helmet = require('helmet');       // v3.21.3 (requerido por FCC)
 const http = require('http');
+const cors = require('cors');           // para exponer headers al runner FCC
 
 const app = express();
 const server = http.createServer(app);
 
 // ===== Seguridad con Helmet (historias 16–19) =====
-app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' })); // historia 19
-app.use(helmet.noSniff());                              // historia 16
-app.use(helmet.xssFilter());                            // historia 17
-app.use(helmet.noCache());                              // historia 18
+// 19) Encabezado "falso" de tecnología
+app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' }));
+// 16) Evitar MIME sniff
+app.use(helmet.noSniff());
+// 17) Prevenir XSS (v3)
+app.use(helmet.xssFilter());
+// 18) Deshabilitar caché en cliente
+app.use(helmet.noCache());
 
-// Archivos estáticos y vista principal
+// ===== CORS para que el runner de FCC pueda LEER los headers (cross-origin) =====
+// Importante: sin esto, el navegador bloquea la lectura de headers y en FCC quedan "Esperando".
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'HEAD', 'OPTIONS'],
+  exposedHeaders: [
+    'X-Powered-By',
+    'X-Content-Type-Options',
+    'X-XSS-Protection',
+    'Cache-Control',
+    'Pragma',
+    'Expires',
+    'Surrogate-Control'
+  ]
+}));
+
+// ===== Archivos estáticos y vista =====
 app.use('/public', express.static(path.join(__dirname, 'public')));
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
-// ===== Juego (estado simple en memoria) =====
+// (Opcional) Health-check para diagnóstico rápido en Render
+app.get('/health', (req, res) => res.status(200).send('ok'));
+
+// ===== Lógica simple del juego =====
 const WIDTH = 800;
 const HEIGHT = 600;
 const STEP = 5;
@@ -38,7 +63,8 @@ function spawnCollectible() {
   collectibles.set(id, c);
   return c;
 }
-// al menos un coleccionable inicial
+
+// Asegura al menos un coleccionable
 if (collectibles.size === 0) spawnCollectible();
 
 // ===== Socket.IO v2.3.0 =====
@@ -54,7 +80,7 @@ io.on('connection', (socket) => {
   };
   players.set(socket.id, player);
 
-  // Enviar estado inicial
+  // Estado inicial al cliente
   socket.emit('init', {
     selfId: socket.id,
     players: Array.from(players.values()),
@@ -62,21 +88,23 @@ io.on('connection', (socket) => {
     bounds: { width: WIDTH, height: HEIGHT }
   });
 
-  // Notificar a todos
+  // Notificar a todos los clientes
   io.emit('players:update', Array.from(players.values()));
 
   // Movimiento
   socket.on('move', (dir) => {
     const p = players.get(socket.id);
     if (!p) return;
+
     switch (dir) {
       case 'up':    p.y = Math.max(0, p.y - STEP); break;
       case 'down':  p.y = Math.min(HEIGHT, p.y + STEP); break;
       case 'left':  p.x = Math.max(0, p.x - STEP); break;
       case 'right': p.x = Math.min(WIDTH, p.x + STEP); break;
+      default: break;
     }
 
-    // Colisión server-side
+    // Colisión server-side con coleccionables
     for (const [cid, c] of collectibles) {
       const dx = p.x - c.x;
       const dy = p.y - c.y;
@@ -91,17 +119,18 @@ io.on('connection', (socket) => {
     io.emit('players:update', Array.from(players.values()));
   });
 
+  // Desconexión
   socket.on('disconnect', () => {
     players.delete(socket.id);
     io.emit('players:update', Array.from(players.values()));
   });
 });
 
-// ===== Server =====
+// ===== Arranque del servidor =====
 const PORT = process.env.PORT || 3000;
 const listener = server.listen(PORT, () => {
   console.log('Server listening on ' + PORT);
 });
 
-// Exportar para que los tests de FCC puedan usar app.address()
+// Export para tests (chai-http usa .address())
 module.exports = listener;
