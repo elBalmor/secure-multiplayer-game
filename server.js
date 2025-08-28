@@ -4,27 +4,50 @@ require('dotenv').config();
 const path = require('path');
 const http = require('http');
 const express = require('express');
-const helmet = require('helmet');              // v3.21.3
 const bodyParser = require('body-parser');
+const socket = require('socket.io');
+
+const helmet = require('helmet');   // ^3.21.3 (FCC)
+const nocache = require('nocache'); // módulo aparte (más fiable que la opción inline)
 const cors = require('cors');
+
+const fccTestingRoutes = require('./routes/fcctesting.js');
+const runner = require('./test-runner.js');
 
 const app = express();
 const server = http.createServer(app);
 
-/* ========= Seguridad (historias 16–19) ========= */
-app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' })); // 19
-app.use(helmet.noSniff());                              // 16
-app.use(helmet.xssFilter());                            // 17
-app.use(helmet.noCache());                              // 18
+/* ========== Seguridad (historias 16–19) ========== */
+// 19) Encabezado “falso” de tecnología
+app.use(helmet.hidePoweredBy({ setTo: 'PHP 7.4.3' }));
+// 16) Evitar MIME sniff
+app.use(helmet.noSniff());
+// 17) Prevenir XSS (v3)
+app.use(helmet.xssFilter());
+// 18) Evitar caché en cliente (usamos el módulo nocache)
+app.use(nocache());
 
-/* ========= body-parser ========= */
+/* ========== body-parser (como en el boilerplate) ========== */
+app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-/* ========= CORS ========= */
-app.use(cors({ origin: '*', methods: ['GET','HEAD','OPTIONS'] }));
+/* ========== CORS (FCC lee cross-origin; expón headers) ========== */
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'HEAD', 'OPTIONS'],
+  exposedHeaders: [
+    'x-powered-by',
+    'x-content-type-options',
+    'x-xss-protection',
+    'cache-control',
+    'pragma',
+    'expires',
+    'surrogate-control'
+  ]
+}));
 app.options('*', cors());
 
-/* ========= Fijar headers de seguridad en TODAS las respuestas ========= */
+/* ========== Fija headers de seguridad en TODAS las respuestas ========== */
 app.use((req, res, next) => {
   res.set({
     'X-Powered-By': 'PHP 7.4.3',
@@ -34,117 +57,137 @@ app.use((req, res, next) => {
     'Pragma': 'no-cache',
     'Expires': '0',
     'Surrogate-Control': 'no-store',
+    // (refuerzo) expón headers en minúsculas para fetch()
     'Access-Control-Expose-Headers':
       'x-powered-by, x-content-type-options, x-xss-protection, cache-control, pragma, expires, surrogate-control'
   });
   next();
 });
 
-/* ========= HEAD explícito en "/" ========= */
+/* ========== HEAD explícito en "/" (algunos runners usan HEAD) ========== */
 app.head('/', (req, res) => res.status(200).end());
 
-/* ========= Endpoint que el runner espera =========
-   - Maneja tanto "/_api/app-info" normal
-   - como URLs mal formadas tipo "/?_fcc=.../_api/app-info"
-*/
-app.use((req, res, next) => {
-  if (req.originalUrl.includes('/_api/app-info')) {
-    // responde JSON con 200 y los headers ya fijados arriba
-    return res.status(200).json({
-      ok: true,
-      info: 'fcc-app-info',
-      time: Date.now()
-    });
-  }
-  return next();
-});
+/* ========== Rutas estáticas ========== */
+app.use('/public', express.static(process.cwd() + '/public'));
+app.use('/assets', express.static(process.cwd() + '/assets'));
 
-/* ========= Archivos estáticos y vista principal ========= */
-app.use('/public', express.static(path.join(__dirname, 'public')));
-
+/* ========== Index ========== */
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'views', 'index.html'));
+  res.sendFile(process.cwd() + '/views/index.html');
 });
 
-/* (Opcional) Health-check */
-app.get('/health', (req, res) => res.status(200).send('ok'));
+/* ========== Rutas de testing FCC (incluye /_api/app-info) ========== */
+fccTestingRoutes(app);
 
-/* ========= Juego (estado simple) ========= */
-const WIDTH = 800;
-const HEIGHT = 600;
-const STEP = 5;
+/* ========== 404 ========== */
+app.use((req, res) => {
+  res.status(404).type('text').send('Not Found');
+});
 
-const players = new Map();      // id -> { id, x, y, score }
-const collectibles = new Map(); // id -> { id, x, y, value }
+/* ========== Arranque + runner local ========== */
+const portNum = process.env.PORT || 3000;
+const listener = server.listen(portNum, () => {
+  console.log(`Listening on port ${portNum}`);
+  if (process.env.NODE_ENV === 'test') {
+    console.log('Running Tests...');
+    setTimeout(function () {
+      try {
+        runner.run();
+      } catch (error) {
+        console.log('Tests are not valid:');
+        console.error(error);
+      }
+    }, 1500);
+  }
+});
 
-function spawnCollectible() {
-  const id = 'c-' + Math.random().toString(36).slice(2, 9);
-  const value = 1 + Math.floor(Math.random() * 3);
-  const x = Math.floor(Math.random() * (WIDTH - 40)) + 20;
-  const y = Math.floor(Math.random() * (HEIGHT - 40)) + 20;
-  const c = { id, x, y, value };
-  collectibles.set(id, c);
-  return c;
-}
-if (collectibles.size === 0) spawnCollectible();
+/* ========== Socket.IO v2.x (compatible con tu package.json) ========== */
+const io = socket(server);
 
-/* ========= Socket.IO v2.3.0 ========= */
-const io = require('socket.io')(server);
+const Collectible = require('./public/Collectible');
+const { generateStartPos, canvasCalcs } = require('./public/canvas-data');
 
-io.on('connection', (socket) => {
-  const player = {
-    id: socket.id,
-    x: Math.floor(Math.random() * (WIDTH - 40)) + 20,
-    y: Math.floor(Math.random() * (HEIGHT - 40)) + 20,
-    score: 0
-  };
-  players.set(socket.id, player);
+let currPlayers = [];
+const destroyedCoins = [];
 
-  socket.emit('init', {
-    selfId: socket.id,
-    players: Array.from(players.values()),
-    collectibles: Array.from(collectibles.values()),
-    bounds: { width: WIDTH, height: HEIGHT }
+const generateCoin = () => {
+  const rand = Math.random();
+  let coinValue;
+  if (rand < 0.6) coinValue = 1;
+  else if (rand < 0.85) coinValue = 2;
+  else coinValue = 3;
+
+  return new Collectible({
+    x: generateStartPos(canvasCalcs.playFieldMinX, canvasCalcs.playFieldMaxX, 5),
+    y: generateStartPos(canvasCalcs.playFieldMinY, canvasCalcs.playFieldMaxY, 5),
+    value: coinValue,
+    id: Date.now()
+  });
+};
+
+let coin = generateCoin();
+
+io.sockets.on('connection', (socket) => {
+  console.log(`New connection ${socket.id}`);
+
+  socket.emit('init', { id: socket.id, players: currPlayers, coin });
+
+  socket.on('new-player', (obj) => {
+    obj.id = socket.id;
+    currPlayers.push(obj);
+    socket.broadcast.emit('new-player', obj);
   });
 
-  io.emit('players:update', Array.from(players.values()));
-
-  socket.on('move', (dir) => {
-    const p = players.get(socket.id);
-    if (!p) return;
-
-    switch (dir) {
-      case 'up':    p.y = Math.max(0, p.y - STEP); break;
-      case 'down':  p.y = Math.min(HEIGHT, p.y + STEP); break;
-      case 'left':  p.x = Math.max(0, p.x - STEP); break;
-      case 'right': p.x = Math.min(WIDTH, p.x + STEP); break;
-      default: break;
+  socket.on('move-player', (dir, obj) => {
+    const movingPlayer = currPlayers.find((p) => p.id === socket.id);
+    if (movingPlayer) {
+      movingPlayer.x = obj.x;
+      movingPlayer.y = obj.y;
+      socket.broadcast.emit('move-player', {
+        id: socket.id,
+        dir,
+        posObj: { x: movingPlayer.x, y: movingPlayer.y }
+      });
     }
+  });
 
-    for (const [cid, c] of collectibles) {
-      const dx = p.x - c.x;
-      const dy = p.y - c.y;
-      if (Math.hypot(dx, dy) < 20) {
-        p.score += c.value;
-        collectibles.delete(cid);
-        const newC = spawnCollectible();
-        io.emit('collectibles:spawn', newC);
+  socket.on('stop-player', (dir, obj) => {
+    const stoppingPlayer = currPlayers.find((p) => p.id === socket.id);
+    if (stoppingPlayer) {
+      stoppingPlayer.x = obj.x;
+      stoppingPlayer.y = obj.y;
+      socket.broadcast.emit('stop-player', {
+        id: socket.id,
+        dir,
+        posObj: { x: stoppingPlayer.x, y: stoppingPlayer.y }
+      });
+    }
+  });
+
+  socket.on('destroy-item', ({ playerId, coinValue, coinId }) => {
+    if (!destroyedCoins.includes(coinId)) {
+      const scoringPlayer = currPlayers.find((o) => o.id === playerId);
+      const sock = io.sockets.connected[scoringPlayer.id];
+      scoringPlayer.score += coinValue;
+      destroyedCoins.push(coinId);
+
+      io.emit('update-player', scoringPlayer);
+
+      if (scoringPlayer.score >= 100) {
+        sock.emit('end-game', 'win');
+        sock.broadcast.emit('end-game', 'lose');
       }
-    }
 
-    io.emit('players:update', Array.from(players.values()));
+      coin = generateCoin();
+      io.emit('new-coin', coin);
+    }
   });
 
   socket.on('disconnect', () => {
-    players.delete(socket.id);
-    io.emit('players:update', Array.from(players.values()));
+    socket.broadcast.emit('remove-player', socket.id);
+    currPlayers = currPlayers.filter((p) => p.id !== socket.id);
   });
 });
 
-/* ========= Arranque y export ========= */
-const PORT = process.env.PORT || 3000;
-const listener = server.listen(PORT, () => {
-  console.log('Server listening on ' + PORT);
-});
-
-module.exports = listener;
+/* ========== Export para tests ========== */
+module.exports = listener; // exporta el servidor (http.Server)
